@@ -194,9 +194,7 @@ async function loadResults() {
     .select('*')
     .order('created_at', { ascending: true });
 
-  const { data: results, error: resError } = await supabaseClient
-    .from('nominee_results')
-    .select('*');
+  const { data: results, error: resError } = await supabaseClient.rpc('get_results');
 
   if (catError || resError) {
     console.error(catError || resError);

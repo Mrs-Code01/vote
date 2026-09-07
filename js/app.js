@@ -1,24 +1,151 @@
 const categoriesEl = document.getElementById('categories');
 const toastEl = document.getElementById('toast');
-const deviceId = getDeviceId();
+
+const emailStepEl = document.getElementById('auth-email-step');
+const codeStepEl = document.getElementById('auth-code-step');
+const emailInput = document.getElementById('email-input');
+const emailError = document.getElementById('email-error');
+const codeInput = document.getElementById('code-input');
+const codeError = document.getElementById('code-error');
+const codeSentToEl = document.getElementById('code-sent-to');
+const sendCodeBtn = document.getElementById('send-code-btn');
+const verifyCodeBtn = document.getElementById('verify-code-btn');
+const resendCodeBtn = document.getElementById('resend-code-btn');
+const changeEmailBtn = document.getElementById('change-email-btn');
+const signedInAsEl = document.getElementById('signed-in-as');
+const signOutBtn = document.getElementById('sign-out-btn');
+const subtitleEl = document.getElementById('page-subtitle');
+
+let pendingEmail = '';
+// Category id -> nominee id the signed-in voter already chose.
+let myVotes = {};
 
 function showToast(message) {
   toastEl.textContent = message;
   toastEl.classList.add('show');
-  setTimeout(() => toastEl.classList.remove('show'), 2600);
+  setTimeout(() => toastEl.classList.remove('show'), 3000);
 }
 
-function votedKey(categoryId) {
-  return `spectra_voted_${categoryId}`;
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
-function getVotedNomineeId(categoryId) {
-  return localStorage.getItem(votedKey(categoryId));
+// ---------- Auth ----------
+
+async function sendCode(email) {
+  const { error } = await supabaseClient.auth.signInWithOtp({
+    email,
+    options: { shouldCreateUser: true },
+  });
+  return error;
 }
 
-function setVoted(categoryId, nomineeId) {
-  localStorage.setItem(votedKey(categoryId), nomineeId);
+async function handleSendCode() {
+  const email = emailInput.value.trim().toLowerCase();
+  emailError.textContent = '';
+
+  if (!email || !email.includes('@')) {
+    emailError.textContent = 'Enter a valid email address.';
+    return;
+  }
+  if (!isEmailDomainAllowed(email)) {
+    emailError.textContent = `Voting is limited to ${ALLOWED_EMAIL_DOMAINS.join(' or ')} email addresses.`;
+    return;
+  }
+
+  sendCodeBtn.disabled = true;
+  sendCodeBtn.textContent = 'Sending…';
+
+  const error = await sendCode(email);
+
+  sendCodeBtn.disabled = false;
+  sendCodeBtn.textContent = 'Send me a code';
+
+  if (error) {
+    console.error(error);
+    emailError.textContent = error.message || 'Could not send the code. Try again.';
+    return;
+  }
+
+  pendingEmail = email;
+  codeSentToEl.textContent = email;
+  emailStepEl.style.display = 'none';
+  codeStepEl.style.display = 'block';
+  codeInput.value = '';
+  codeInput.focus();
+  showToast('Code sent — check your inbox.');
 }
+
+async function handleVerifyCode() {
+  const token = codeInput.value.trim();
+  codeError.textContent = '';
+
+  if (token.length < 6) {
+    codeError.textContent = 'Enter the 6-digit code from your email.';
+    return;
+  }
+
+  verifyCodeBtn.disabled = true;
+  verifyCodeBtn.textContent = 'Verifying…';
+
+  const { error } = await supabaseClient.auth.verifyOtp({
+    email: pendingEmail,
+    token,
+    type: 'email',
+  });
+
+  verifyCodeBtn.disabled = false;
+  verifyCodeBtn.textContent = 'Verify & start voting';
+
+  if (error) {
+    console.error(error);
+    codeError.textContent = 'That code is wrong or has expired. Try again, or resend it.';
+    return;
+  }
+  // onAuthStateChange takes it from here.
+}
+
+async function handleResendCode() {
+  resendCodeBtn.disabled = true;
+  const error = await sendCode(pendingEmail);
+  resendCodeBtn.disabled = false;
+  if (error) {
+    codeError.textContent = error.message || 'Could not resend the code.';
+    return;
+  }
+  showToast('New code sent.');
+}
+
+function showEmailStep() {
+  codeStepEl.style.display = 'none';
+  emailStepEl.style.display = 'block';
+  categoriesEl.innerHTML = '';
+  signedInAsEl.textContent = '';
+  signOutBtn.style.display = 'none';
+  subtitleEl.textContent = 'Verify your email to vote. One vote per person, per category.';
+  emailInput.focus();
+}
+
+sendCodeBtn.addEventListener('click', handleSendCode);
+emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleSendCode(); });
+verifyCodeBtn.addEventListener('click', handleVerifyCode);
+codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleVerifyCode(); });
+resendCodeBtn.addEventListener('click', handleResendCode);
+changeEmailBtn.addEventListener('click', () => {
+  pendingEmail = '';
+  emailInput.value = '';
+  emailError.textContent = '';
+  codeError.textContent = '';
+  showEmailStep();
+});
+signOutBtn.addEventListener('click', async () => {
+  await supabaseClient.auth.signOut();
+  myVotes = {};
+});
+
+// ---------- Voting ----------
 
 function renderConfigWarning() {
   categoriesEl.innerHTML = `
@@ -28,16 +155,8 @@ function renderConfigWarning() {
     </div>`;
 }
 
-function renderEmptyState() {
-  categoriesEl.innerHTML = `
-    <div class="card empty-state">
-      <div class="big">No categories yet</div>
-      <p>Check back soon — voting will open once categories and nominees are set up.</p>
-    </div>`;
-}
-
 function categoryCardHtml(category, nominees) {
-  const votedNomineeId = getVotedNomineeId(category.id);
+  const votedNomineeId = myVotes[category.id];
   const hasVoted = !!votedNomineeId;
 
   const optionsHtml = nominees.map(n => {
@@ -62,10 +181,14 @@ function categoryCardHtml(category, nominees) {
     </div>`;
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+async function loadMyVotes() {
+  const { data, error } = await supabaseClient.from('votes').select('category_id, nominee_id');
+  if (error) {
+    console.error(error);
+    return;
+  }
+  myVotes = {};
+  (data || []).forEach(v => { myVotes[v.category_id] = v.nominee_id; });
 }
 
 async function loadAndRender() {
@@ -81,7 +204,11 @@ async function loadAndRender() {
   }
 
   if (!categories || categories.length === 0) {
-    renderEmptyState();
+    categoriesEl.innerHTML = `
+      <div class="card empty-state">
+        <div class="big">No categories yet</div>
+        <p>Check back soon — voting will open once categories and nominees are set up.</p>
+      </div>`;
     return;
   }
 
@@ -134,15 +261,14 @@ async function submitVote(categoryId, btn) {
   const { error } = await supabaseClient.from('votes').insert({
     category_id: categoryId,
     nominee_id: nomineeId,
-    device_id: deviceId,
   });
 
   if (error) {
     console.error(error);
     if (error.code === '23505') {
-      // unique violation: already voted from this device for this category
-      setVoted(categoryId, nomineeId);
-      showToast('Looks like you already voted in this category.');
+      // Unique violation: this account already voted in this category.
+      showToast('You have already voted in this category.');
+      await loadMyVotes();
       loadAndRender();
       return;
     }
@@ -152,13 +278,43 @@ async function submitVote(categoryId, btn) {
     return;
   }
 
-  setVoted(categoryId, nomineeId);
+  myVotes[categoryId] = nomineeId;
   showToast('Vote recorded — thank you!');
   loadAndRender();
 }
 
-if (typeof isSupabaseConfigured === 'function' && !isSupabaseConfigured()) {
-  renderConfigWarning();
-} else {
-  loadAndRender();
+// ---------- Boot ----------
+
+async function showSignedIn(session) {
+  emailStepEl.style.display = 'none';
+  codeStepEl.style.display = 'none';
+  signedInAsEl.textContent = session.user.email;
+  signOutBtn.style.display = 'inline-block';
+  subtitleEl.textContent = 'Pick your favorite in each category. One vote per person, per category.';
+  await loadMyVotes();
+  await loadAndRender();
 }
+
+async function init() {
+  if (typeof isSupabaseConfigured === 'function' && !isSupabaseConfigured()) {
+    renderConfigWarning();
+    return;
+  }
+
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (session) {
+    await showSignedIn(session);
+  } else {
+    showEmailStep();
+  }
+
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    if (session) {
+      showSignedIn(session);
+    } else {
+      showEmailStep();
+    }
+  });
+}
+
+init();
