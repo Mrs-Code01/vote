@@ -1,27 +1,25 @@
--- Spectra Week voting app schema (full install, for a fresh project).
--- Already running an earlier version? Run the latest migration in this folder
--- instead -- this file assumes empty tables.
+-- Migration: go back to simple name-based voting.
+-- Run this ONCE in the Supabase SQL editor. It removes the email-login setup
+-- and replaces it with "type your full name to vote".
+--
+-- Your categories and nominees are kept. Any votes already cast are cleared,
+-- because there is no way to map a logged-in account back to a person's name.
+--
+-- After this you can ignore the SMTP and email-template setup entirely.
 
-create extension if not exists pgcrypto;
-
-create table if not exists categories (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists nominees (
-  id uuid primary key default gen_random_uuid(),
-  category_id uuid not null references categories(id) on delete cascade,
-  name text not null,
-  created_at timestamptz not null default now()
-);
+-- Remove the email-login machinery.
+drop function if exists is_eligible_voter(text);
+drop function if exists voted_categories(text);
+drop table if exists eligible_voters;
+drop table if exists allowed_domains;
+drop view if exists nominee_results;
+drop table if exists votes;
 
 -- One vote per person, per category, keyed on their name.
 -- voter_key normalises the name -- lowercased, with runs of whitespace
 -- collapsed -- so "Mercy  Idubor", "mercy idubor" and "MERCY IDUBOR" all
 -- count as the same person.
-create table if not exists votes (
+create table votes (
   id uuid primary key default gen_random_uuid(),
   category_id uuid not null references categories(id) on delete cascade,
   nominee_id uuid not null references nominees(id) on delete cascade,
@@ -34,6 +32,13 @@ create table if not exists votes (
   constraint voter_name_is_full check (position(' ' in btrim(voter_name)) > 0),
   unique (category_id, voter_key)
 );
+
+alter table votes enable row level security;
+
+-- Anyone can cast a vote; nobody can read the votes table directly, so the
+-- ballot stays secret. Counts and the voter log come from the functions below.
+drop policy if exists "votes insert" on votes;
+create policy "votes insert" on votes for insert with check (true);
 
 -- Vote tallies for the admin Results tab.
 create or replace function get_results()
@@ -68,7 +73,8 @@ as $$
   where v.voter_key = lower(regexp_replace(btrim(check_name), '\s+', ' ', 'g'));
 $$;
 
--- The voter log for the admin Voters tab: who voted and when, but not for whom.
+-- The voter log for the admin Voters tab: who voted and when, but not for
+-- whom.
 create or replace function get_voter_log()
 returns table (
   voter_name text,
@@ -88,29 +94,3 @@ $$;
 grant execute on function get_results() to anon, authenticated;
 grant execute on function voted_categories(text) to anon, authenticated;
 grant execute on function get_voter_log() to anon, authenticated;
-
--- Row Level Security
-alter table categories enable row level security;
-alter table nominees enable row level security;
-alter table votes enable row level security;
-
--- Categories and nominees: readable by everyone, writable with the anon key.
--- NOTE: the admin settings page is protected only by a client-side password
--- prompt, not by Supabase auth, so the anon key needs write access here.
--- Anyone who extracts the anon key from the site's JS could write to these
--- tables directly.
-drop policy if exists "categories read" on categories;
-create policy "categories read" on categories for select using (true);
-drop policy if exists "categories write" on categories;
-create policy "categories write" on categories for all using (true) with check (true);
-
-drop policy if exists "nominees read" on nominees;
-create policy "nominees read" on nominees for select using (true);
-drop policy if exists "nominees write" on nominees;
-create policy "nominees write" on nominees for all using (true) with check (true);
-
--- Votes: anyone can cast one, nobody can read the table directly, so the
--- ballot stays secret. There is no update or delete policy, so a cast vote is
--- final. Counts and the voter log come from the functions above.
-drop policy if exists "votes insert" on votes;
-create policy "votes insert" on votes for insert with check (true);

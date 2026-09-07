@@ -17,35 +17,23 @@
         </div>
       </div>
       <div class="top-actions">
-        <span class="small-muted" id="signed-in-as"></span>
-        <button class="btn btn-outline btn-sm" id="sign-out-btn" style="display:none;">Sign out</button>
+        <span class="small-muted" id="voting-as"></span>
+        <button class="btn btn-outline btn-sm" id="change-name-btn" style="display:none;">Not you?</button>
       </div>
     </header>
 
     <h1 class="page-title">Spectra <span class="accent">Week</span> Voting System</h1>
-    <p class="page-subtitle" id="page-subtitle">Verify your email to vote. One vote per person, per category.</p>
+    <p class="page-subtitle" id="page-subtitle">Enter your full name to vote. One vote per person, per category.</p>
 
-    <!-- Step 1: enter email -->
-    <div id="auth-email-step" class="card" style="display:none; max-width:440px;">
-      <label class="field-label" for="email-input">Your work email</label>
-      <input class="input" type="email" id="email-input" placeholder="you@company.com" autocomplete="email" />
-      <div class="error-text" id="email-error"></div>
-      <button class="btn btn-gold" id="send-code-btn" style="margin-top:12px; width:100%;">Send me a code</button>
+    <div id="name-step" class="card" style="display:none; max-width:440px;">
+      <label class="field-label" for="name-input">Your full name</label>
+      <input class="input" type="text" id="name-input" placeholder="e.g. Mercy Idubor" autocomplete="name" />
+      <div class="error-text" id="name-error"></div>
+      <button class="btn btn-gold" id="start-voting-btn" style="margin-top:12px; width:100%;">Start voting</button>
       <p class="small-muted" style="margin-top:12px; margin-bottom:0;">
-        We'll email you a 6-digit code. This ties your vote to you, so nobody can vote twice from another device.
+        Your name is recorded with your vote so nobody votes twice. Please use
+        the full name your colleagues know you by.
       </p>
-    </div>
-
-    <!-- Step 2: enter the code -->
-    <div id="auth-code-step" class="card" style="display:none; max-width:440px;">
-      <label class="field-label" for="code-input">Enter the 6-digit code sent to <span id="code-sent-to"></span></label>
-      <input class="input" type="text" id="code-input" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
-      <div class="error-text" id="code-error"></div>
-      <button class="btn btn-gold" id="verify-code-btn" style="margin-top:12px; width:100%;">Verify &amp; start voting</button>
-      <div style="margin-top:12px; display:flex; gap:14px;">
-        <button class="btn btn-outline btn-sm" id="resend-code-btn">Resend code</button>
-        <button class="btn btn-outline btn-sm" id="change-email-btn">Use a different email</button>
-      </div>
     </div>
 
     <div id="categories"></div>

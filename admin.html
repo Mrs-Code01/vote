@@ -52,29 +52,18 @@
       </div>
 
       <div id="tab-voters" style="display:none;">
-        <div id="eligibility-status"></div>
-
         <div class="card">
-          <div class="category-title">Allowed email domains</div>
-          <div class="category-meta">Anyone with a work email on these domains can vote once.</div>
           <div class="inline-form">
-            <input class="input" id="new-domain-input" placeholder="e.g. spectra.com" />
-            <button class="btn btn-gold" id="add-domain-btn">Add Domain</button>
+            <input class="input" id="voter-search" placeholder="Search names…" />
+            <button class="btn btn-outline" id="refresh-voters-btn">Refresh</button>
           </div>
-          <div id="domains-list" style="margin-top:14px;"></div>
+          <p class="small-muted" style="margin-top:12px; margin-bottom:0;">
+            Everyone who has voted, and how many categories they voted in. Names
+            similar to each other are flagged so you can spot the same person
+            entered twice.
+          </p>
         </div>
-
-        <div class="card">
-          <div class="category-title">Individual voters</div>
-          <div class="category-meta">
-            For people outside your domains. Paste as many as you like — one per
-            line, or separated by commas.
-          </div>
-          <textarea class="input" id="new-emails-input" rows="4"
-            placeholder="mercy@example.com&#10;david@example.com"></textarea>
-          <button class="btn btn-gold" id="add-emails-btn" style="margin-top:10px;">Add Voters</button>
-          <div id="voters-list" style="margin-top:16px;"></div>
-        </div>
+        <div id="voters-list"></div>
       </div>
 
       <div id="tab-results" style="display:none;">

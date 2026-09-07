@@ -188,135 +188,118 @@ async function loadManage() {
   });
 }
 
-// Voters: who is eligible to vote
+// Voters: who has voted so far
 
-document.getElementById('add-domain-btn').addEventListener('click', addDomain);
-document.getElementById('new-domain-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') addDomain();
-});
-document.getElementById('add-emails-btn').addEventListener('click', addEmails);
+let voterLog = [];
 
-async function addDomain() {
-  const input = document.getElementById('new-domain-input');
-  // Accept "@spectra.com", "spectra.com" or a full address pasted by mistake.
-  const domain = input.value.trim().toLowerCase().replace(/^@/, '').replace(/^.*@/, '');
-  if (!domain) return;
-  if (!domain.includes('.')) {
-    showToast('That does not look like a domain.');
-    return;
+document.getElementById('refresh-voters-btn').addEventListener('click', loadVoters);
+document.getElementById('voter-search').addEventListener('input', renderVoters);
+
+// Edit distance, used to flag near-identical names like "Jon Smith" vs
+// "John Smith" that the database treats as two different people.
+function editDistance(a, b) {
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(
+        prev[j] + 1,
+        row[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = row;
   }
-  const { error } = await supabaseClient.from('allowed_domains').insert({ domain });
-  if (error) {
-    console.error(error);
-    showToast(error.code === '23505' ? 'That domain is already added.' : 'Could not add domain.');
-    return;
-  }
-  input.value = '';
-  showToast('Domain added.');
-  loadVoters();
-}
-
-async function removeDomain(domain) {
-  const { error } = await supabaseClient.from('allowed_domains').delete().eq('domain', domain);
-  if (error) {
-    console.error(error);
-    showToast('Could not remove domain.');
-    return;
-  }
-  loadVoters();
-}
-
-async function addEmails() {
-  const input = document.getElementById('new-emails-input');
-  const emails = input.value
-    .split(/[\s,;]+/)
-    .map(e => e.trim().toLowerCase())
-    .filter(e => e.includes('@'));
-
-  if (!emails.length) {
-    showToast('Enter at least one email address.');
-    return;
-  }
-
-  const unique = [...new Set(emails)];
-  const { error } = await supabaseClient
-    .from('eligible_voters')
-    .upsert(unique.map(email => ({ email })), { onConflict: 'email' });
-
-  if (error) {
-    console.error(error);
-    showToast('Could not add voters.');
-    return;
-  }
-  input.value = '';
-  showToast(`${unique.length} voter${unique.length === 1 ? '' : 's'} added.`);
-  loadVoters();
-}
-
-async function removeVoter(email) {
-  const { error } = await supabaseClient.from('eligible_voters').delete().eq('email', email);
-  if (error) {
-    console.error(error);
-    showToast('Could not remove voter.');
-    return;
-  }
-  loadVoters();
+  return prev[b.length];
 }
 
 async function loadVoters() {
-  const [{ data: domains, error: domError }, { data: voters, error: votError }] = await Promise.all([
-    supabaseClient.from('allowed_domains').select('*').order('domain'),
-    supabaseClient.from('eligible_voters').select('*').order('email'),
-  ]);
+  const { data, error } = await supabaseClient.rpc('get_voter_log');
+  if (error) {
+    console.error(error);
+    document.getElementById('voters-list').innerHTML =
+      `<div class="card empty-state"><div class="big">Couldn't load voters</div><p>Have you run the latest migration in <code>supabase/</code> against your project?</p></div>`;
+    return;
+  }
+  voterLog = data || [];
+  renderVoters();
+}
 
-  const statusEl = document.getElementById('eligibility-status');
+function renderVoters() {
+  const listEl = document.getElementById('voters-list');
+  const search = document.getElementById('voter-search').value.trim().toLowerCase();
 
-  if (domError || votError) {
-    console.error(domError || votError);
-    statusEl.innerHTML = `<div class="card empty-state"><div class="big">Couldn't load voter rules</div><p>Have you run <code>migration-002-voter-eligibility.sql</code> in the Supabase SQL editor?</p></div>`;
+  if (!voterLog.length) {
+    listEl.innerHTML = `<div class="card empty-state"><div class="big">Nobody has voted yet</div><p>Names will appear here as votes come in.</p></div>`;
     return;
   }
 
-  const hasRules = (domains || []).length > 0 || (voters || []).length > 0;
-  statusEl.innerHTML = hasRules
-    ? `<div class="card" style="border-color: rgba(53,201,143,0.4);">
-         <span class="voted-badge">&#10003; Voting is restricted</span>
-         <p class="small-muted" style="margin-bottom:0; margin-top:10px;">
-           Only the domains and people listed below can vote — one vote each.
-         </p>
-       </div>`
-    : `<div class="card" style="border-color: rgba(244,196,48,0.5);">
-         <div class="category-title" style="font-size:16px;">&#9888; Voting is open to anyone</div>
-         <p class="small-muted" style="margin-bottom:0;">
-           Any email address can register and vote right now, so one person with
-           several addresses could vote more than once. Add your work domain
-           below to close that.
-         </p>
-       </div>`;
-
-  document.getElementById('domains-list').innerHTML = (domains || []).length
-    ? domains.map(d => `
-        <div class="nominee-row">
-          <span class="nominee-name">@${escapeHtml(d.domain)}</span>
-          <button class="btn btn-danger btn-sm" data-remove-domain="${escapeHtml(d.domain)}">Remove</button>
-        </div>`).join('')
-    : '<p class="small-muted">No domains added yet.</p>';
-
-  document.getElementById('voters-list').innerHTML = (voters || []).length
-    ? `<div class="category-meta">${voters.length} individual voter${voters.length === 1 ? '' : 's'}</div>`
-      + voters.map(v => `
-        <div class="nominee-row">
-          <span class="nominee-name">${escapeHtml(v.email)}</span>
-          <button class="btn btn-danger btn-sm" data-remove-voter="${escapeHtml(v.email)}">Remove</button>
-        </div>`).join('')
-    : '<p class="small-muted">No individual voters added.</p>';
-
-  document.querySelectorAll('[data-remove-domain]').forEach(btn => {
-    btn.addEventListener('click', () => removeDomain(btn.dataset.removeDomain));
+  // One entry per person, with the categories they voted in.
+  const byPerson = new Map();
+  voterLog.forEach(row => {
+    const key = row.voter_name.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!byPerson.has(key)) {
+      byPerson.set(key, { name: row.voter_name.trim(), key, categories: [], lastVoted: row.voted_at });
+    }
+    const person = byPerson.get(key);
+    person.categories.push(row.category_name);
+    if (row.voted_at > person.lastVoted) person.lastVoted = row.voted_at;
   });
-  document.querySelectorAll('[data-remove-voter]').forEach(btn => {
-    btn.addEventListener('click', () => removeVoter(btn.dataset.removeVoter));
-  });
+
+  const people = [...byPerson.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+  // Flag pairs of names that are suspiciously close to each other.
+  const similar = new Map();
+  for (let i = 0; i < people.length; i++) {
+    for (let j = i + 1; j < people.length; j++) {
+      const a = people[i], b = people[j];
+      const limit = Math.min(a.key.length, b.key.length) <= 8 ? 1 : 2;
+      if (editDistance(a.key, b.key) <= limit) {
+        if (!similar.has(a.key)) similar.set(a.key, []);
+        if (!similar.has(b.key)) similar.set(b.key, []);
+        similar.get(a.key).push(b.name);
+        similar.get(b.key).push(a.name);
+      }
+    }
+  }
+
+  const visible = search ? people.filter(p => p.key.includes(search)) : people;
+
+  const summary = `
+    <div class="card">
+      <div class="category-title">${people.length} voter${people.length === 1 ? '' : 's'}</div>
+      <div class="category-meta">${voterLog.length} vote${voterLog.length === 1 ? '' : 's'} cast in total${
+        similar.size ? ` &middot; <span style="color: var(--gold-400);">${similar.size} name${similar.size === 1 ? '' : 's'} look similar</span>` : ''
+      }</div>
+    </div>`;
+
+  if (!visible.length) {
+    listEl.innerHTML = summary + `<div class="card empty-state"><div class="big">No match</div><p>No voter matches “${escapeHtml(search)}”.</p></div>`;
+    return;
+  }
+
+  const rows = visible.map(p => {
+    const flag = similar.get(p.key);
+    return `
+      <div class="card" style="padding:16px;${flag ? ' border-color: rgba(244,196,48,0.5);' : ''}">
+        <div class="category-header-row">
+          <div>
+            <div class="nominee-name">${escapeHtml(p.name)}</div>
+            <div class="small-muted" style="margin-top:4px;">
+              ${p.categories.length} categor${p.categories.length === 1 ? 'y' : 'ies'}:
+              ${escapeHtml(p.categories.join(', '))}
+            </div>
+            ${flag ? `<div class="small-muted" style="margin-top:6px; color: var(--gold-400);">
+              &#9888; Similar to ${escapeHtml([...new Set(flag)].join(', '))} — possibly the same person
+            </div>` : ''}
+          </div>
+          <span class="small-muted" style="white-space:nowrap;">${new Date(p.lastVoted).toLocaleString()}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  listEl.innerHTML = summary + rows;
 }
 
 // Results

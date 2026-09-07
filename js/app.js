@@ -1,24 +1,19 @@
 const categoriesEl = document.getElementById('categories');
 const toastEl = document.getElementById('toast');
 
-const emailStepEl = document.getElementById('auth-email-step');
-const codeStepEl = document.getElementById('auth-code-step');
-const emailInput = document.getElementById('email-input');
-const emailError = document.getElementById('email-error');
-const codeInput = document.getElementById('code-input');
-const codeError = document.getElementById('code-error');
-const codeSentToEl = document.getElementById('code-sent-to');
-const sendCodeBtn = document.getElementById('send-code-btn');
-const verifyCodeBtn = document.getElementById('verify-code-btn');
-const resendCodeBtn = document.getElementById('resend-code-btn');
-const changeEmailBtn = document.getElementById('change-email-btn');
-const signedInAsEl = document.getElementById('signed-in-as');
-const signOutBtn = document.getElementById('sign-out-btn');
+const nameStepEl = document.getElementById('name-step');
+const nameInput = document.getElementById('name-input');
+const nameError = document.getElementById('name-error');
+const startVotingBtn = document.getElementById('start-voting-btn');
+const votingAsEl = document.getElementById('voting-as');
+const changeNameBtn = document.getElementById('change-name-btn');
 const subtitleEl = document.getElementById('page-subtitle');
 
-let pendingEmail = '';
-// Category id -> nominee id the signed-in voter already chose.
-let myVotes = {};
+const NAME_STORAGE_KEY = 'spectra_voter_name';
+
+let voterName = '';
+// Category ids this voter has already voted in.
+let votedCategories = new Set();
 
 function showToast(message) {
   toastEl.textContent = message;
@@ -32,128 +27,55 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// ---------- Auth ----------
-
-async function sendCode(email) {
-  const { error } = await supabaseClient.auth.signInWithOtp({
-    email,
-    options: { shouldCreateUser: true },
-  });
-  return error;
+// Collapse runs of whitespace so " Mercy   Idubor " matches "Mercy Idubor".
+// The database normalises the same way when enforcing one-vote-per-name.
+function tidyName(name) {
+  return String(name).trim().replace(/\s+/g, ' ');
 }
 
-async function handleSendCode() {
-  const email = emailInput.value.trim().toLowerCase();
-  emailError.textContent = '';
-
-  if (!email || !email.includes('@')) {
-    emailError.textContent = 'Enter a valid email address.';
-    return;
-  }
-  sendCodeBtn.disabled = true;
-  sendCodeBtn.textContent = 'Checking…';
-
-  // Fail fast for people who aren't on the voter list, rather than emailing
-  // them a code that the database would reject anyway.
-  const { data: eligible, error: eligErr } = await supabaseClient
-    .rpc('is_eligible_voter', { check_email: email });
-
-  if (eligErr) {
-    console.error(eligErr);
-  } else if (eligible === false) {
-    sendCodeBtn.disabled = false;
-    sendCodeBtn.textContent = 'Send me a code';
-    emailError.textContent = 'This email is not on the voter list. Use your work email, or ask the organiser to add you.';
-    return;
-  }
-
-  sendCodeBtn.textContent = 'Sending…';
-
-  const error = await sendCode(email);
-
-  sendCodeBtn.disabled = false;
-  sendCodeBtn.textContent = 'Send me a code';
-
-  if (error) {
-    console.error(error);
-    emailError.textContent = error.message || 'Could not send the code. Try again.';
-    return;
-  }
-
-  pendingEmail = email;
-  codeSentToEl.textContent = email;
-  emailStepEl.style.display = 'none';
-  codeStepEl.style.display = 'block';
-  codeInput.value = '';
-  codeInput.focus();
-  showToast('Code sent — check your inbox.');
+function isFullName(name) {
+  return tidyName(name).split(' ').filter(Boolean).length >= 2;
 }
 
-async function handleVerifyCode() {
-  const token = codeInput.value.trim();
-  codeError.textContent = '';
+// ---------- Name step ----------
 
-  if (token.length < 6) {
-    codeError.textContent = 'Enter the 6-digit code from your email.';
-    return;
-  }
-
-  verifyCodeBtn.disabled = true;
-  verifyCodeBtn.textContent = 'Verifying…';
-
-  const { error } = await supabaseClient.auth.verifyOtp({
-    email: pendingEmail,
-    token,
-    type: 'email',
-  });
-
-  verifyCodeBtn.disabled = false;
-  verifyCodeBtn.textContent = 'Verify & start voting';
-
-  if (error) {
-    console.error(error);
-    codeError.textContent = 'That code is wrong or has expired. Try again, or resend it.';
-    return;
-  }
-  // onAuthStateChange takes it from here.
-}
-
-async function handleResendCode() {
-  resendCodeBtn.disabled = true;
-  const error = await sendCode(pendingEmail);
-  resendCodeBtn.disabled = false;
-  if (error) {
-    codeError.textContent = error.message || 'Could not resend the code.';
-    return;
-  }
-  showToast('New code sent.');
-}
-
-function showEmailStep() {
-  codeStepEl.style.display = 'none';
-  emailStepEl.style.display = 'block';
+function showNameStep() {
+  nameStepEl.style.display = 'block';
   categoriesEl.innerHTML = '';
-  signedInAsEl.textContent = '';
-  signOutBtn.style.display = 'none';
-  subtitleEl.textContent = 'Verify your email to vote. One vote per person, per category.';
-  emailInput.focus();
+  votingAsEl.textContent = '';
+  changeNameBtn.style.display = 'none';
+  subtitleEl.textContent = 'Enter your full name to vote. One vote per person, per category.';
+  nameInput.focus();
 }
 
-sendCodeBtn.addEventListener('click', handleSendCode);
-emailInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleSendCode(); });
-verifyCodeBtn.addEventListener('click', handleVerifyCode);
-codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleVerifyCode(); });
-resendCodeBtn.addEventListener('click', handleResendCode);
-changeEmailBtn.addEventListener('click', () => {
-  pendingEmail = '';
-  emailInput.value = '';
-  emailError.textContent = '';
-  codeError.textContent = '';
-  showEmailStep();
-});
-signOutBtn.addEventListener('click', async () => {
-  await supabaseClient.auth.signOut();
-  myVotes = {};
+async function startVoting() {
+  const entered = tidyName(nameInput.value);
+  nameError.textContent = '';
+
+  if (!entered) {
+    nameError.textContent = 'Please enter your name.';
+    return;
+  }
+  if (!isFullName(entered)) {
+    nameError.textContent = 'Please enter your full name — first and last.';
+    return;
+  }
+
+  voterName = entered;
+  localStorage.setItem(NAME_STORAGE_KEY, voterName);
+  await showVoting();
+}
+
+startVotingBtn.addEventListener('click', startVoting);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') startVoting(); });
+
+changeNameBtn.addEventListener('click', () => {
+  voterName = '';
+  votedCategories = new Set();
+  localStorage.removeItem(NAME_STORAGE_KEY);
+  nameInput.value = '';
+  nameError.textContent = '';
+  showNameStep();
 });
 
 // ---------- Voting ----------
@@ -167,20 +89,16 @@ function renderConfigWarning() {
 }
 
 function categoryCardHtml(category, nominees) {
-  const votedNomineeId = myVotes[category.id];
-  const hasVoted = !!votedNomineeId;
+  const hasVoted = votedCategories.has(category.id);
 
-  const optionsHtml = nominees.map(n => {
-    const selected = n.id === votedNomineeId;
-    return `
-      <label class="nominee-option ${selected ? 'selected' : ''}" data-nominee-id="${n.id}">
-        <input type="radio" name="nominee_${category.id}" value="${n.id}" ${selected ? 'checked' : ''} ${hasVoted ? 'disabled' : ''} />
+  const optionsHtml = nominees.map(n => `
+      <label class="nominee-option" data-nominee-id="${n.id}">
+        <input type="radio" name="nominee_${category.id}" value="${n.id}" ${hasVoted ? 'disabled' : ''} />
         <span class="nominee-name">${escapeHtml(n.name)}</span>
-      </label>`;
-  }).join('');
+      </label>`).join('');
 
   const actionHtml = hasVoted
-    ? `<span class="voted-badge">&#10003; Vote recorded</span>`
+    ? `<span class="voted-badge">&#10003; You have voted in this category</span>`
     : `<button class="btn btn-gold" data-vote-category="${category.id}" ${nominees.length === 0 ? 'disabled' : ''}>Submit Vote</button>`;
 
   return `
@@ -192,14 +110,15 @@ function categoryCardHtml(category, nominees) {
     </div>`;
 }
 
-async function loadMyVotes() {
-  const { data, error } = await supabaseClient.from('votes').select('category_id, nominee_id');
+// Ask the database which categories this name already voted in, so the page is
+// correct even on a different device or after clearing browser data.
+async function loadVotedCategories() {
+  const { data, error } = await supabaseClient.rpc('voted_categories', { check_name: voterName });
   if (error) {
     console.error(error);
     return;
   }
-  myVotes = {};
-  (data || []).forEach(v => { myVotes[v.category_id] = v.nominee_id; });
+  votedCategories = new Set((data || []).map(r => r.category_id));
 }
 
 async function loadAndRender() {
@@ -264,30 +183,23 @@ async function submitVote(categoryId, btn) {
     showToast('Pick a nominee first.');
     return;
   }
-  const nomineeId = checked.value;
 
   btn.disabled = true;
   btn.textContent = 'Submitting…';
 
   const { error } = await supabaseClient.from('votes').insert({
     category_id: categoryId,
-    nominee_id: nomineeId,
+    nominee_id: checked.value,
+    voter_name: voterName,
   });
 
   if (error) {
     console.error(error);
     if (error.code === '23505') {
-      // Unique violation: this account already voted in this category.
-      showToast('You have already voted in this category.');
-      await loadMyVotes();
+      // Unique violation: this name already voted in this category.
+      showToast(`A vote has already been recorded for ${voterName} in this category.`);
+      votedCategories.add(categoryId);
       loadAndRender();
-      return;
-    }
-    if (error.code === '42501') {
-      // RLS rejected it: this account is not on the voter list.
-      showToast('This account is not eligible to vote. Contact the organiser.');
-      btn.disabled = false;
-      btn.textContent = 'Submit Vote';
       return;
     }
     showToast('Something went wrong submitting your vote.');
@@ -296,20 +208,19 @@ async function submitVote(categoryId, btn) {
     return;
   }
 
-  myVotes[categoryId] = nomineeId;
+  votedCategories.add(categoryId);
   showToast('Vote recorded — thank you!');
   loadAndRender();
 }
 
 // ---------- Boot ----------
 
-async function showSignedIn(session) {
-  emailStepEl.style.display = 'none';
-  codeStepEl.style.display = 'none';
-  signedInAsEl.textContent = session.user.email;
-  signOutBtn.style.display = 'inline-block';
+async function showVoting() {
+  nameStepEl.style.display = 'none';
+  votingAsEl.textContent = `Voting as ${voterName}`;
+  changeNameBtn.style.display = 'inline-block';
   subtitleEl.textContent = 'Pick your favorite in each category. One vote per person, per category.';
-  await loadMyVotes();
+  await loadVotedCategories();
   await loadAndRender();
 }
 
@@ -319,20 +230,13 @@ async function init() {
     return;
   }
 
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  if (session) {
-    await showSignedIn(session);
+  const saved = localStorage.getItem(NAME_STORAGE_KEY);
+  if (saved && isFullName(saved)) {
+    voterName = tidyName(saved);
+    await showVoting();
   } else {
-    showEmailStep();
+    showNameStep();
   }
-
-  supabaseClient.auth.onAuthStateChange((event, session) => {
-    if (session) {
-      showSignedIn(session);
-    } else {
-      showEmailStep();
-    }
-  });
 }
 
 init();
