@@ -71,32 +71,68 @@ create policy "nominees read" on nominees for select using (true);
 drop policy if exists "nominees write" on nominees;
 create policy "nominees write" on nominees for all using (true) with check (true);
 
--- Votes: only signed-in users, only as themselves, and they can only read
--- their own ballot. No update/delete policy exists, so a cast vote is final.
+-- Who is allowed to vote at all. Manage these from the admin page's Voters
+-- tab: by work-email domain, by an explicit list of people, or both. With no
+-- rules configured, voting is open to any email address -- which means one
+-- person with several personal addresses could vote more than once.
+create table if not exists allowed_domains (
+  domain text primary key,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists eligible_voters (
+  email text primary key,
+  created_at timestamptz not null default now()
+);
+
+create or replace function is_eligible_voter(check_email text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    (not exists (select 1 from eligible_voters)
+      and not exists (select 1 from allowed_domains))
+    or exists (
+      select 1 from eligible_voters e
+      where e.email = lower(trim(check_email))
+    )
+    or exists (
+      select 1 from allowed_domains d
+      where lower(trim(check_email)) like '%@' || d.domain
+    );
+$$;
+
+grant execute on function is_eligible_voter(text) to anon, authenticated;
+
+alter table allowed_domains enable row level security;
+alter table eligible_voters enable row level security;
+
+drop policy if exists "allowed_domains write" on allowed_domains;
+create policy "allowed_domains write" on allowed_domains
+  for all using (true) with check (true);
+
+drop policy if exists "eligible_voters write" on eligible_voters;
+create policy "eligible_voters write" on eligible_voters
+  for all using (true) with check (true);
+
+-- Votes: only signed-in users, only as themselves, only if eligible, and they
+-- can only read their own ballot. No update/delete policy exists, so a cast
+-- vote is final.
 drop policy if exists "votes read" on votes;
 drop policy if exists "votes insert" on votes;
 
 drop policy if exists "votes insert own" on votes;
 create policy "votes insert own" on votes
   for insert to authenticated
-  with check (auth.uid() = voter_id);
+  with check (
+    auth.uid() = voter_id
+    and is_eligible_voter(auth.jwt() ->> 'email')
+  );
 
 drop policy if exists "votes read own" on votes;
 create policy "votes read own" on votes
   for select to authenticated
   using (auth.uid() = voter_id);
-
--- OPTIONAL: restrict voting to your company's email domain, enforced by the
--- database. Without this, anyone with any email address can create an account
--- and vote -- which means one determined person with several personal email
--- addresses could still vote more than once. Replace yourcompany.com below,
--- uncomment, and run it. Set the same domain in ALLOWED_EMAIL_DOMAINS in
--- js/supabaseClient.js so the site shows a helpful message up front.
---
--- drop policy if exists "votes insert own" on votes;
--- create policy "votes insert own" on votes
---   for insert to authenticated
---   with check (
---     auth.uid() = voter_id
---     and lower(auth.jwt() ->> 'email') like '%@yourcompany.com'
---   );

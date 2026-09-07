@@ -50,12 +50,23 @@ async function handleSendCode() {
     emailError.textContent = 'Enter a valid email address.';
     return;
   }
-  if (!isEmailDomainAllowed(email)) {
-    emailError.textContent = `Voting is limited to ${ALLOWED_EMAIL_DOMAINS.join(' or ')} email addresses.`;
+  sendCodeBtn.disabled = true;
+  sendCodeBtn.textContent = 'Checking…';
+
+  // Fail fast for people who aren't on the voter list, rather than emailing
+  // them a code that the database would reject anyway.
+  const { data: eligible, error: eligErr } = await supabaseClient
+    .rpc('is_eligible_voter', { check_email: email });
+
+  if (eligErr) {
+    console.error(eligErr);
+  } else if (eligible === false) {
+    sendCodeBtn.disabled = false;
+    sendCodeBtn.textContent = 'Send me a code';
+    emailError.textContent = 'This email is not on the voter list. Use your work email, or ask the organiser to add you.';
     return;
   }
 
-  sendCodeBtn.disabled = true;
   sendCodeBtn.textContent = 'Sending…';
 
   const error = await sendCode(email);
@@ -270,6 +281,13 @@ async function submitVote(categoryId, btn) {
       showToast('You have already voted in this category.');
       await loadMyVotes();
       loadAndRender();
+      return;
+    }
+    if (error.code === '42501') {
+      // RLS rejected it: this account is not on the voter list.
+      showToast('This account is not eligible to vote. Contact the organiser.');
+      btn.disabled = false;
+      btn.textContent = 'Submit Vote';
       return;
     }
     showToast('Something went wrong submitting your vote.');

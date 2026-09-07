@@ -55,8 +55,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     const tab = btn.dataset.tab;
     document.getElementById('tab-manage').style.display = tab === 'manage' ? 'block' : 'none';
+    document.getElementById('tab-voters').style.display = tab === 'voters' ? 'block' : 'none';
     document.getElementById('tab-results').style.display = tab === 'results' ? 'block' : 'none';
     if (tab === 'results') loadResults();
+    if (tab === 'voters') loadVoters();
   });
 });
 
@@ -183,6 +185,137 @@ async function loadManage() {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') addNominee(catId, input);
     });
+  });
+}
+
+// Voters: who is eligible to vote
+
+document.getElementById('add-domain-btn').addEventListener('click', addDomain);
+document.getElementById('new-domain-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addDomain();
+});
+document.getElementById('add-emails-btn').addEventListener('click', addEmails);
+
+async function addDomain() {
+  const input = document.getElementById('new-domain-input');
+  // Accept "@spectra.com", "spectra.com" or a full address pasted by mistake.
+  const domain = input.value.trim().toLowerCase().replace(/^@/, '').replace(/^.*@/, '');
+  if (!domain) return;
+  if (!domain.includes('.')) {
+    showToast('That does not look like a domain.');
+    return;
+  }
+  const { error } = await supabaseClient.from('allowed_domains').insert({ domain });
+  if (error) {
+    console.error(error);
+    showToast(error.code === '23505' ? 'That domain is already added.' : 'Could not add domain.');
+    return;
+  }
+  input.value = '';
+  showToast('Domain added.');
+  loadVoters();
+}
+
+async function removeDomain(domain) {
+  const { error } = await supabaseClient.from('allowed_domains').delete().eq('domain', domain);
+  if (error) {
+    console.error(error);
+    showToast('Could not remove domain.');
+    return;
+  }
+  loadVoters();
+}
+
+async function addEmails() {
+  const input = document.getElementById('new-emails-input');
+  const emails = input.value
+    .split(/[\s,;]+/)
+    .map(e => e.trim().toLowerCase())
+    .filter(e => e.includes('@'));
+
+  if (!emails.length) {
+    showToast('Enter at least one email address.');
+    return;
+  }
+
+  const unique = [...new Set(emails)];
+  const { error } = await supabaseClient
+    .from('eligible_voters')
+    .upsert(unique.map(email => ({ email })), { onConflict: 'email' });
+
+  if (error) {
+    console.error(error);
+    showToast('Could not add voters.');
+    return;
+  }
+  input.value = '';
+  showToast(`${unique.length} voter${unique.length === 1 ? '' : 's'} added.`);
+  loadVoters();
+}
+
+async function removeVoter(email) {
+  const { error } = await supabaseClient.from('eligible_voters').delete().eq('email', email);
+  if (error) {
+    console.error(error);
+    showToast('Could not remove voter.');
+    return;
+  }
+  loadVoters();
+}
+
+async function loadVoters() {
+  const [{ data: domains, error: domError }, { data: voters, error: votError }] = await Promise.all([
+    supabaseClient.from('allowed_domains').select('*').order('domain'),
+    supabaseClient.from('eligible_voters').select('*').order('email'),
+  ]);
+
+  const statusEl = document.getElementById('eligibility-status');
+
+  if (domError || votError) {
+    console.error(domError || votError);
+    statusEl.innerHTML = `<div class="card empty-state"><div class="big">Couldn't load voter rules</div><p>Have you run <code>migration-002-voter-eligibility.sql</code> in the Supabase SQL editor?</p></div>`;
+    return;
+  }
+
+  const hasRules = (domains || []).length > 0 || (voters || []).length > 0;
+  statusEl.innerHTML = hasRules
+    ? `<div class="card" style="border-color: rgba(53,201,143,0.4);">
+         <span class="voted-badge">&#10003; Voting is restricted</span>
+         <p class="small-muted" style="margin-bottom:0; margin-top:10px;">
+           Only the domains and people listed below can vote — one vote each.
+         </p>
+       </div>`
+    : `<div class="card" style="border-color: rgba(244,196,48,0.5);">
+         <div class="category-title" style="font-size:16px;">&#9888; Voting is open to anyone</div>
+         <p class="small-muted" style="margin-bottom:0;">
+           Any email address can register and vote right now, so one person with
+           several addresses could vote more than once. Add your work domain
+           below to close that.
+         </p>
+       </div>`;
+
+  document.getElementById('domains-list').innerHTML = (domains || []).length
+    ? domains.map(d => `
+        <div class="nominee-row">
+          <span class="nominee-name">@${escapeHtml(d.domain)}</span>
+          <button class="btn btn-danger btn-sm" data-remove-domain="${escapeHtml(d.domain)}">Remove</button>
+        </div>`).join('')
+    : '<p class="small-muted">No domains added yet.</p>';
+
+  document.getElementById('voters-list').innerHTML = (voters || []).length
+    ? `<div class="category-meta">${voters.length} individual voter${voters.length === 1 ? '' : 's'}</div>`
+      + voters.map(v => `
+        <div class="nominee-row">
+          <span class="nominee-name">${escapeHtml(v.email)}</span>
+          <button class="btn btn-danger btn-sm" data-remove-voter="${escapeHtml(v.email)}">Remove</button>
+        </div>`).join('')
+    : '<p class="small-muted">No individual voters added.</p>';
+
+  document.querySelectorAll('[data-remove-domain]').forEach(btn => {
+    btn.addEventListener('click', () => removeDomain(btn.dataset.removeDomain));
+  });
+  document.querySelectorAll('[data-remove-voter]').forEach(btn => {
+    btn.addEventListener('click', () => removeVoter(btn.dataset.removeVoter));
   });
 }
 

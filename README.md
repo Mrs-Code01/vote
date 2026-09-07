@@ -14,9 +14,9 @@ settings page, backed by Supabase.
 1. Create a project at [supabase.com](https://supabase.com) (free tier is fine).
 2. In the Supabase dashboard, open **SQL Editor** and run
    [`supabase/schema.sql`](supabase/schema.sql).
-   *Upgrading from the older device-based version? Run
-   [`supabase/migration-001-auth-voting.sql`](supabase/migration-001-auth-voting.sql)
-   instead — it keeps your categories and nominees.*
+   *Upgrading from an older version? Run the migrations in
+   [`supabase/`](supabase/) in order instead — they keep your categories and
+   nominees.*
 3. In **Project Settings → API**, copy your **Project URL** and **anon public
    key** into [`js/supabaseClient.js`](js/supabaseClient.js).
 4. **Put the code in the email** (required — see below).
@@ -58,18 +58,23 @@ about ten minutes to set up. Then raise the limit under
 To change the admin password, edit `ADMIN_PASSWORD` at the top of
 [`js/admin.js`](js/admin.js).
 
-## Locking voting to your company
+## Deciding who can vote
 
-By default **any** email address can register and vote — so one person with
-several personal addresses could still vote more than once. To prevent that,
-restrict voting to your work domain in two places:
+Open the admin page's **Voters** tab. Until you add a rule there, any email
+address can register and vote — so one person with several personal addresses
+could vote more than once. The tab shows a warning while that's the case.
 
-1. Set `ALLOWED_EMAIL_DOMAINS = ['yourcompany.com']` in
-   [`js/supabaseClient.js`](js/supabaseClient.js) (shows voters a clear message).
-2. Uncomment the domain policy at the bottom of
-   [`supabase/schema.sql`](supabase/schema.sql) and run it, replacing
-   `yourcompany.com`. **This is the one that actually enforces it** — step 1
-   alone can be bypassed.
+Two ways to restrict it, and you can combine them:
+
+- **Allowed email domains** — add `spectra.com` and everyone with a work email
+  on that domain can vote once. This is the usual choice.
+- **Individual voters** — paste in specific addresses for people outside your
+  domains (contractors, guests, personal accounts). One per line or
+  comma-separated; duplicates are ignored.
+
+Both are enforced by the database against the voter's *verified* email, so the
+rule cannot be bypassed from the browser. People who aren't eligible are told
+so before any email is sent, rather than getting a code that won't work.
 
 ## How one-vote-per-person is enforced
 
@@ -81,9 +86,10 @@ browser data. Row Level Security also means voters can only ever read their own
 ballot — nobody can query who voted for whom, and votes cannot be edited or
 deleted once cast.
 
-The remaining gap is registration, not voting: whoever can receive mail at an
-allowed address can cast one vote. Locking to your company domain (above)
-closes it as far as it can be closed without issuing accounts yourself.
+Eligibility is checked at the same moment, against the verified email in the
+voter's token. So with a domain or voter list configured, the guarantee is one
+vote per eligible mailbox — the only way left to vote twice is to control a
+second mailbox that you have explicitly allowed.
 
 ## A note on the admin password
 

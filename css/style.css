@@ -28,11 +28,16 @@ html, body {
 body {
   font-family: 'Inter', system-ui, sans-serif;
   color: var(--white);
-  background:
+  /* Solid colour first: it guarantees dark ground behind the white text even
+     where the gradient doesn't paint (long pages, iOS Safari's patchy support
+     for background-attachment: fixed). */
+  background-color: var(--purple-950);
+  background-image:
     radial-gradient(circle at 15% 0%, rgba(244, 196, 48, 0.16), transparent 45%),
     radial-gradient(circle at 100% 20%, rgba(100, 37, 163, 0.35), transparent 55%),
     linear-gradient(160deg, var(--purple-950) 0%, var(--purple-900) 45%, var(--purple-800) 100%);
   background-attachment: fixed;
+  background-repeat: no-repeat;
   min-height: 100vh;
 }
 
